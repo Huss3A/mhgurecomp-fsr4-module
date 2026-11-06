@@ -1,6 +1,6 @@
-# FSR 4 plugin for MHGU Recomp (Windows x64, MSYS2 UCRT64: clang, make, curl).
+# FSR 4 engine module for MHGU Recomp (Windows x64, MSYS2 UCRT64: clang, make, curl).
 #   make            builds build/fsr4/ : fsr4.dll + AMD's FSR SDK DLLs + licence texts
-#   make install PLUGINS=<the port's plugins folder>    copies it there and adds `fsr4` to enabled.txt
+#   make install MODULES=<the port's engine_modules folder>    copies it there and adds `fsr4` to enabled.txt
 # AMD's DLLs are not in this repository: they are downloaded from AMD's tagged SDK release and checked against their SHA-256.
 CC       := clang
 SDK_VER  := 2.4.0
@@ -14,9 +14,9 @@ LDFLAGS  := -shared -fuse-ld=lld -static-libgcc -lversion
 all: $(OUT)/fsr4.dll $(OUT)/amd_fidelityfx_loader_vk.dll $(OUT)/amd_fidelityfx_upscaler_vk.dll $(OUT)/AMD-FSR-SDK.txt $(OUT)/LICENSE.txt
 	@echo "built $(OUT)"
 
-$(OUT)/fsr4.dll: fsr4_plugin.c plugin_api.h third_party/ffx_vk_portable.h
+$(OUT)/fsr4.dll: fsr4_module.c engine_module_api.h third_party/ffx_vk_portable.h
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) fsr4_plugin.c $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) fsr4_module.c $(LDFLAGS) -o $@
 
 # FETCH(file, url, sha256)
 define FETCH
@@ -48,12 +48,12 @@ $(OUT)/LICENSE.txt: LICENSE
 
 .PHONY: install clean
 install: all
-	@test -n "$(PLUGINS)" || { echo "usage: make install PLUGINS=<the port's plugins folder>"; exit 1; }
-	mkdir -p "$(PLUGINS)/fsr4"
-	cp $(OUT)/* "$(PLUGINS)/fsr4/"
-	@touch "$(PLUGINS)/enabled.txt"
-	@grep -qx fsr4 "$(PLUGINS)/enabled.txt" || echo fsr4 >> "$(PLUGINS)/enabled.txt"
-	@echo "installed: $(PLUGINS)/fsr4, listed in $(PLUGINS)/enabled.txt"
+	@test -n "$(MODULES)" || { echo "usage: make install MODULES=<the port's engine_modules folder>"; exit 1; }
+	mkdir -p "$(MODULES)/fsr4"
+	cp $(OUT)/* "$(MODULES)/fsr4/"
+	@touch "$(MODULES)/enabled.txt"
+	@grep -qx fsr4 "$(MODULES)/enabled.txt" || echo fsr4 >> "$(MODULES)/enabled.txt"
+	@echo "installed: $(MODULES)/fsr4, listed in $(MODULES)/enabled.txt"
 
 clean:
 	rm -rf build

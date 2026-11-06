@@ -1,4 +1,4 @@
-// FSR 4 for MHGU Recomp, as an engine plugin (plugin_api.h). The port has no FSR 4 code and no hooks for it: this plugin
+// FSR 4 for MHGU Recomp, as an engine module (engine_module_api.h). The port has no FSR 4 code and no hooks for it: this module
 // applies its changes to the running program itself, in memory, once it is loaded:
 //
 //   1. vkCreateInstance / vkCreateDevice (the port's import table entries): the instance asks for Vulkan 1.3 (FSR 4's shaders
@@ -22,14 +22,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "plugin_api.h"
+#include "engine_module_api.h"
+
+MHGU_ENGINE_MODULE_EXPORT const uint32_t mhgu_engine_module_api = MHGU_ENGINE_MODULE_API;
 
 #ifndef _WIN64
 #include <vulkan/vulkan.h>
-// Not Windows x64: nothing to patch with, the plugin declines.
-MHGU_PLUGIN_EXPORT bool mhgu_plugin_entry(const MhguHost *host, MhguPlugin *out) {
+// Not Windows x64: nothing to patch with, the module declines.
+MHGU_ENGINE_MODULE_EXPORT bool mhgu_engine_module_entry(const MhguHost *host, MhguEngineModule *out) {
     (void)out;
-    host->log("[fsr4] this plugin is Windows x64 only: not loaded\n");
+    host->log("[fsr4] this module is Windows x64 only: not loaded\n");
     return false;
 }
 #else
@@ -92,6 +94,21 @@ static bool patch(void *from, void *to) {
     return true;
 }
 
+// The import table entries changed, with what they held: undo_iat puts them back (a module that says no must leave nothing).
+static struct { ULONG_PTR *slot; ULONG_PTR orig; } g_iat[2];
+static int g_niat;
+
+static void undo_iat(void) {
+    while (g_niat > 0) {
+        int i = --g_niat;
+        DWORD old;
+        if (VirtualProtect(g_iat[i].slot, sizeof(void *), PAGE_READWRITE, &old)) {
+            *g_iat[i].slot = g_iat[i].orig;
+            VirtualProtect(g_iat[i].slot, sizeof(void *), old, &old);
+        }
+    }
+}
+
 // The entry of `name` imported from `dll` in `mod`'s import table: replaced by `nw`, the old value into *orig.
 static bool iat_hook(HMODULE mod, const char *dll, const char *name, void *nw, void **orig) {
     BYTE *base = (BYTE *)mod;
@@ -108,6 +125,7 @@ static bool iat_hook(HMODULE mod, const char *dll, const char *name, void *nw, v
             DWORD old;
             if (!VirtualProtect(&ft->u1.Function, sizeof(void *), PAGE_READWRITE, &old)) return false;
             *orig = (void *)ft->u1.Function;
+            if (g_niat < 2) g_iat[g_niat].slot = &ft->u1.Function, g_iat[g_niat++].orig = ft->u1.Function;  // (to put back)
             ft->u1.Function = (ULONG_PTR)nw;
             VirtualProtect(&ft->u1.Function, sizeof(void *), old, &old);
             return true;
@@ -331,7 +349,7 @@ static bool init_loader(void) {
     char file[MAX_PATH + 40];
     if (env) snprintf(file, sizeof file, "%s", env);
     else snprintf(file, sizeof file, "%s/amd_fidelityfx_loader_vk.dll", g_dir);
-    MultiByteToWideChar(CP_UTF8, 0, file, -1, path, MAX_PATH);
+    MultiByteToWideChar(CP_ACP, 0, file, -1, path, MAX_PATH);  // (module_dir is in the system's code page, not UTF-8)
     for (wchar_t *c = path; *c; c++)
         if (*c == L'/') *c = L'\\';
     if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
@@ -492,11 +510,27 @@ static bool setting_off(const char *key) {
     return !_stricmp(v, "off") || !_stricmp(v, "0") || !_stricmp(v, "false") || !_stricmp(v, "no");
 }
 
-MHGU_PLUGIN_EXPORT bool mhgu_plugin_entry(const MhguHost *host, MhguPlugin *out) {
+// A clean exit (the renderer is up and the GPU has finished): AMD's context goes.
+static void module_shutdown(void) {
+    if (ctx && f_destroy) {
+        f_destroy(&ctx, NULL);
+        ctx = NULL;
+        LOG("[fsr4] shutdown: FSR 4 context destroyed after %llu frames\n", (unsigned long long)frames);
+    }
+}
+
+// Everything the entry changed, put back: a module that says no leaves the port as it was.
+static void undo_all(void) {
+    unpatch();
+    undo_iat();
+}
+
+MHGU_ENGINE_MODULE_EXPORT bool mhgu_engine_module_entry(const MhguHost *host, MhguEngineModule *out) {
     g_host = host;
-    g_dir = host->plugin_dir;
-    out->api = MHGU_PLUGIN_API;
+    g_dir = host->module_dir;
     out->name = "FSR 4 (AMD SDK)";
+    out->shutdown = module_shutdown;
+    LOG("[fsr4] starting (port %s)\n", host->port_version);
     if (setting_off("FSR")) {
         LOG("[fsr4] [Upscaler] FSR is Off: nothing to do\n");
         return true;  // (loaded, idle: changing FSR to On takes effect at the next start)
@@ -506,7 +540,7 @@ MHGU_PLUGIN_EXPORT bool mhgu_plugin_entry(const MhguHost *host, MhguPlugin *out)
     p_gipa = vk ? (PFN_vkGetInstanceProcAddr)(void *)GetProcAddress(vk, "vkGetInstanceProcAddr") : NULL;
     p_gdpa = vk ? (PFN_vkGetDeviceProcAddr)(void *)GetProcAddress(vk, "vkGetDeviceProcAddr") : NULL;
     if (!g_target || !p_gipa || !p_gdpa) {
-        LOG("[fsr4] this build of the port does not have what the plugin hooks (FSR 3.1's dispatch %p, Vulkan %p): not loaded\n",
+        LOG("[fsr4] this build of the port does not have what the module hooks (FSR 3.1's dispatch %p, Vulkan %p): not loaded\n",
             (void *)g_target, (void *)vk);
         return false;
     }
@@ -514,6 +548,7 @@ MHGU_PLUGIN_EXPORT bool mhgu_plugin_entry(const MhguHost *host, MhguPlugin *out)
     if (!iat_hook(exe, "vulkan-1.dll", "vkCreateInstance", (void *)hook_create_instance, &o1) ||
         !iat_hook(exe, "vulkan-1.dll", "vkCreateDevice", (void *)hook_create_device, &o2)) {
         LOG("[fsr4] the port does not import vkCreateInstance / vkCreateDevice from vulkan-1.dll: not loaded\n");
+        undo_all();  // (one of the two may have been changed)
         return false;
     }
     real_create_instance = (PFN_vkCreateInstance)o1;
@@ -523,6 +558,7 @@ MHGU_PLUGIN_EXPORT bool mhgu_plugin_entry(const MhguHost *host, MhguPlugin *out)
     if (!p_features2) p_features2 = (PFN_vkGetPhysicalDeviceFeatures2)(void *)GetProcAddress(vk, "vkGetPhysicalDeviceFeatures2KHR");
     if (!patch((void *)g_target, (void *)hook_record_dispatch)) {
         LOG("[fsr4] the port's code could not be patched: not loaded\n");
+        undo_all();  // (the import table entries go back too)
         return false;
     }
     LOG("[fsr4] hooks in place (vkCreateInstance, vkCreateDevice, FSR 3.1 dispatch at %p)\n", (void *)g_target);
