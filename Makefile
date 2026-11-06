@@ -4,6 +4,7 @@
 # AMD's DLLs are not in this repository: they are downloaded from AMD's tagged SDK release and checked against their SHA-256.
 CC       := clang
 SDK_VER  := 2.4.0
+VERSION  := 0.1.0
 SDK_URL  := https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v$(SDK_VER)/Kits/FidelityFX
 DL       := build/download
 OUT      := build/fsr4
@@ -46,7 +47,7 @@ $(OUT)/LICENSE.txt: LICENSE
 	@mkdir -p $(OUT)
 	cp $< $@
 
-.PHONY: install clean
+.PHONY: install package clean
 install: all
 	@test -n "$(MODULES)" || { echo "usage: make install MODULES=<the port's engine_modules folder>"; exit 1; }
 	mkdir -p "$(MODULES)/fsr4"
@@ -54,6 +55,11 @@ install: all
 	@touch "$(MODULES)/enabled.txt"
 	@grep -qx fsr4 "$(MODULES)/enabled.txt" || echo fsr4 >> "$(MODULES)/enabled.txt"
 	@echo "installed: $(MODULES)/fsr4, listed in $(MODULES)/enabled.txt"
+
+# a release zip: the fsr4 folder, with AMD's licence text (AMD-FSR-SDK.txt) beside the DLLs
+package: all
+	cd build && rm -f fsr4-module-$(VERSION).zip && zip -qr fsr4-module-$(VERSION).zip fsr4
+	@echo "built build/fsr4-module-$(VERSION).zip"
 
 clean:
 	rm -rf build
